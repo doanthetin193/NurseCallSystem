@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="NurseServer/NurseServer.csproj" Id="9b52b0d7-3395-425b-882a-bb081d321483" />
+  <Project Path="PatientClient/PatientClient.csproj" Id="66d9b80e-931a-481b-aa51-1dbf709a26d3" />
+</Solution>
