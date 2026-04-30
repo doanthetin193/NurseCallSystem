@@ -12,6 +12,10 @@ namespace NurseServer.Data
 
         private static string GetConnectionString() => $"Data Source={DbFileName};Version=3;";
 
+        // Chương 7: Lock object dùng chung — bảo vệ các thao tác GHI DB khỏi race condition
+        // khi IcmpHealthCheckLoop (Thread nền) và HandleTcpClientAsync (nhiều Task song song) cùng ghi đồng thời
+        private static readonly object _dbLock = new object();
+
         public static void InitDatabase()
         {
             if (!File.Exists(DbFileName)) SQLiteConnection.CreateFile(DbFileName);
@@ -94,24 +98,28 @@ namespace NurseServer.Data
 
         public static void UpsertBed(PatientBed bed)
         {
-            using (var conn = new SQLiteConnection(GetConnectionString()))
+            // Chương 7: lock serializes writes — IcmpHealthCheck + HandleTcpClient gọi method này đồng thời
+            lock (_dbLock)
             {
-                conn.Open();
-                string query = @"
-                    INSERT INTO PatientBeds (RoomName, BedName, MacAddress, IpAddress, Status, LastSeen)
-                    VALUES (@Room, @Bed, @Mac, @Ip, @Status, @LastSeen)
-                    ON CONFLICT(RoomName, BedName) DO UPDATE SET
-                    MacAddress = @Mac, IpAddress = @Ip, Status = @Status, LastSeen = @LastSeen;";
-                    
-                using (var cmd = new SQLiteCommand(query, conn))
+                using (var conn = new SQLiteConnection(GetConnectionString()))
                 {
-                    cmd.Parameters.AddWithValue("@Mac", bed.MacAddress ?? "");
-                    cmd.Parameters.AddWithValue("@Room", bed.RoomName);
-                    cmd.Parameters.AddWithValue("@Bed", bed.BedName);
-                    cmd.Parameters.AddWithValue("@Ip", bed.IpAddress ?? "");
-                    cmd.Parameters.AddWithValue("@Status", bed.Status);
-                    cmd.Parameters.AddWithValue("@LastSeen", bed.LastSeen);
-                    cmd.ExecuteNonQuery();
+                    conn.Open();
+                    string query = @"
+                        INSERT INTO PatientBeds (RoomName, BedName, MacAddress, IpAddress, Status, LastSeen)
+                        VALUES (@Room, @Bed, @Mac, @Ip, @Status, @LastSeen)
+                        ON CONFLICT(RoomName, BedName) DO UPDATE SET
+                        MacAddress = @Mac, IpAddress = @Ip, Status = @Status, LastSeen = @LastSeen;";
+                    
+                    using (var cmd = new SQLiteCommand(query, conn))
+                    {
+                        cmd.Parameters.AddWithValue("@Mac", bed.MacAddress ?? "");
+                        cmd.Parameters.AddWithValue("@Room", bed.RoomName);
+                        cmd.Parameters.AddWithValue("@Bed", bed.BedName);
+                        cmd.Parameters.AddWithValue("@Ip", bed.IpAddress ?? "");
+                        cmd.Parameters.AddWithValue("@Status", bed.Status);
+                        cmd.Parameters.AddWithValue("@LastSeen", bed.LastSeen);
+                        cmd.ExecuteNonQuery();
+                    }
                 }
             }
         }
@@ -188,40 +196,46 @@ namespace NurseServer.Data
 
         public static void UpdateBedStatus(string roomName, string bedName, string status)
         {
-            try
+            lock (_dbLock)
             {
-                using (var conn = new SQLiteConnection(GetConnectionString()))
+                try
                 {
-                    conn.Open();
-                    using (var cmd = new SQLiteCommand("UPDATE PatientBeds SET Status = @status WHERE RoomName = @room AND BedName = @bed", conn))
+                    using (var conn = new SQLiteConnection(GetConnectionString()))
                     {
-                        cmd.Parameters.AddWithValue("@status", status);
-                        cmd.Parameters.AddWithValue("@room", roomName);
-                        cmd.Parameters.AddWithValue("@bed", bedName);
-                        cmd.ExecuteNonQuery();
+                        conn.Open();
+                        using (var cmd = new SQLiteCommand("UPDATE PatientBeds SET Status = @status WHERE RoomName = @room AND BedName = @bed", conn))
+                        {
+                            cmd.Parameters.AddWithValue("@status", status);
+                            cmd.Parameters.AddWithValue("@room", roomName);
+                            cmd.Parameters.AddWithValue("@bed", bedName);
+                            cmd.ExecuteNonQuery();
+                        }
                     }
                 }
+                catch { }
             }
-            catch { }
         }
 
         public static void AddCallLog(CallLog log)
         {
-            try
+            lock (_dbLock)
             {
-                using (var conn = new SQLiteConnection(GetConnectionString()))
+                try
                 {
-                    conn.Open();
-                    using (var cmd = new SQLiteCommand("INSERT INTO CallLogs (PatientBedName, CallType, RequestTime) VALUES (@bed, @type, @time)", conn))
+                    using (var conn = new SQLiteConnection(GetConnectionString()))
                     {
-                        cmd.Parameters.AddWithValue("@bed", log.PatientBedName);
-                        cmd.Parameters.AddWithValue("@type", log.CallType);
-                        cmd.Parameters.AddWithValue("@time", log.RequestTime.ToString("yyyy-MM-dd HH:mm:ss"));
-                        cmd.ExecuteNonQuery();
+                        conn.Open();
+                        using (var cmd = new SQLiteCommand("INSERT INTO CallLogs (PatientBedName, CallType, RequestTime) VALUES (@bed, @type, @time)", conn))
+                        {
+                            cmd.Parameters.AddWithValue("@bed", log.PatientBedName);
+                            cmd.Parameters.AddWithValue("@type", log.CallType);
+                            cmd.Parameters.AddWithValue("@time", log.RequestTime.ToString("yyyy-MM-dd HH:mm:ss"));
+                            cmd.ExecuteNonQuery();
+                        }
                     }
                 }
+                catch { }
             }
-            catch { }
         }
 
         public static System.Collections.Generic.List<CallLog> GetAllCallLogs()

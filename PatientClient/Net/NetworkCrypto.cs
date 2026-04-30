@@ -1,65 +1,101 @@
 using System;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace PatientClient.Net
 {
     /// <summary>
-    /// Chương 4 (Bảo mật): Mã hóa/giải mã dữ liệu truyền qua Socket bằng XOR cipher.
-    /// Mọi gói tin UDP/TCP đều được mã hóa trước khi gửi và giải mã sau khi nhận,
-    /// ngăn chặn việc đọc được nội dung khi bắt gói (packet sniffing) trên mạng LAN.
+    /// Chương 10 — Bảo mật trong lập trình mạng:
+    ///   10.3 Mã hóa đối xứng AES-128-CBC  → đảm bảo Tính Bí Mật (Confidentiality)
+    ///   10.4 HMAC-SHA256                  → đảm bảo Tính Toàn Vẹn + Xác Thực thông điệp
+    /// Mọi gói UDP/TCP đều được mã hóa AES trước khi gửi.
+    /// Riêng gói TCP Alert còn gắn HMAC để chống sửa đổi và giả mạo.
     /// </summary>
     public static class NetworkCrypto
     {
-        // Khóa bí mật dùng chung giữa Server và Client (phải khớp nhau)
-        private static readonly byte[] Key = Encoding.UTF8.GetBytes("NurseCall@2026!");
+        // 10.3 – AES-128: key 16 bytes + IV 16 bytes, dùng chung Server & Client
+        private static readonly byte[] AesKey  = Encoding.UTF8.GetBytes("NurseCall@2026!!"); // 16 bytes
+        private static readonly byte[] AesIV   = Encoding.UTF8.GetBytes("NurseIV@20261234"); // 16 bytes
 
-        /// <summary>
-        /// Mã hóa chuỗi → byte[] bằng XOR, dùng cho UDP (raw bytes).
-        /// </summary>
+        // 10.4 – HMAC-SHA256: shared secret để xác thực thông điệp TCP
+        private static readonly byte[] HmacKey = Encoding.UTF8.GetBytes("HmacKey@NurseApp"); // 16 bytes
+
+        // ── UDP ──────────────────────────────────────────────────────────────────────
+
+        /// <summary>UDP: Mã hóa string → byte[] bằng AES-128-CBC (10.3)</summary>
         public static byte[] Encrypt(string plainText)
         {
             byte[] data = Encoding.UTF8.GetBytes(plainText);
-            return XorBytes(data);
+            using (var aes = Aes.Create())
+            {
+                aes.Key = AesKey; aes.IV = AesIV;
+                aes.Mode = CipherMode.CBC; aes.Padding = PaddingMode.PKCS7;
+                using (var enc = aes.CreateEncryptor())
+                    return enc.TransformFinalBlock(data, 0, data.Length);
+            }
         }
 
-        /// <summary>
-        /// Giải mã byte[] → chuỗi bằng XOR, dùng cho UDP (raw bytes).
-        /// </summary>
-        public static string Decrypt(byte[] encryptedData, int length = -1)
+        /// <summary>UDP: Giải mã byte[] → string bằng AES-128-CBC (10.3)</summary>
+        public static string Decrypt(byte[] data, int length = -1)
         {
-            int len = length < 0 ? encryptedData.Length : length;
-            byte[] slice = new byte[len];
-            Array.Copy(encryptedData, slice, len);
-            byte[] decrypted = XorBytes(slice);
-            return Encoding.UTF8.GetString(decrypted);
+            try
+            {
+                int len = length < 0 ? data.Length : length;
+                byte[] slice = new byte[len];
+                Array.Copy(data, slice, len);
+                using (var aes = Aes.Create())
+                {
+                    aes.Key = AesKey; aes.IV = AesIV;
+                    aes.Mode = CipherMode.CBC; aes.Padding = PaddingMode.PKCS7;
+                    using (var dec = aes.CreateDecryptor())
+                        return Encoding.UTF8.GetString(dec.TransformFinalBlock(slice, 0, slice.Length));
+                }
+            }
+            catch { return ""; }
         }
 
-        /// <summary>
-        /// Mã hóa chuỗi → Base64 string, dùng cho TCP (StreamWriter/ReadLine).
-        /// Base64 đảm bảo byte rác sau XOR không phá vỡ encoding UTF-8 dòng text.
-        /// </summary>
+        // ── TCP ──────────────────────────────────────────────────────────────────────
+
+        /// <summary>TCP: Mã hóa string → Base64 string (AES + Base64) (10.3)</summary>
         public static string EncryptToBase64(string plainText)
+            => Convert.ToBase64String(Encrypt(plainText));
+
+        /// <summary>TCP: Giải mã Base64 string → string gốc (10.3)</summary>
+        public static string DecryptFromBase64(string base64Text)
+            => Decrypt(Convert.FromBase64String(base64Text));
+
+        // ── HMAC ─────────────────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Gắn HMAC-SHA256 vào cuối data: "payload|HMAC:abcdef..."
+        /// Dùng trước EncryptToBase64 khi gửi TCP Alert (10.4)
+        /// </summary>
+        public static string AttachHmac(string data)
         {
-            byte[] encrypted = Encrypt(plainText);
-            return Convert.ToBase64String(encrypted);
+            using (var hmac = new HMACSHA256(HmacKey))
+            {
+                byte[] mac = hmac.ComputeHash(Encoding.UTF8.GetBytes(data));
+                string hex = BitConverter.ToString(mac).Replace("-", "").ToLower();
+                return data + "|HMAC:" + hex;
+            }
         }
 
         /// <summary>
-        /// Giải mã Base64 string → chuỗi gốc, dùng cho TCP (StreamReader/ReadLine).
+        /// Tách và xác minh HMAC sau khi giải mã TCP.
+        /// Trả về payload gốc nếu HMAC hợp lệ; null nếu bị giả mạo hoặc sửa đổi (10.4)
         /// </summary>
-        public static string DecryptFromBase64(string base64Text)
+        public static string VerifyAndStripHmac(string dataWithHmac)
         {
-            byte[] encrypted = Convert.FromBase64String(base64Text);
-            return Decrypt(encrypted);
-        }
-
-        // Thuật toán XOR: mỗi byte dữ liệu XOR với byte tương ứng của Key (lặp vòng)
-        private static byte[] XorBytes(byte[] data)
-        {
-            byte[] result = new byte[data.Length];
-            for (int i = 0; i < data.Length; i++)
-                result[i] = (byte)(data[i] ^ Key[i % Key.Length]);
-            return result;
+            int idx = dataWithHmac.LastIndexOf("|HMAC:");
+            if (idx < 0) return null;
+            string payload  = dataWithHmac.Substring(0, idx);
+            string received = dataWithHmac.Substring(idx + 6);
+            using (var hmac = new HMACSHA256(HmacKey))
+            {
+                byte[] mac = hmac.ComputeHash(Encoding.UTF8.GetBytes(payload));
+                string expected = BitConverter.ToString(mac).Replace("-", "").ToLower();
+                return string.Equals(received, expected, StringComparison.Ordinal) ? payload : null;
+            }
         }
     }
 }

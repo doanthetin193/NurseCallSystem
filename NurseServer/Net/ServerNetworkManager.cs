@@ -3,6 +3,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Net.NetworkInformation;
 using System.IO;
@@ -39,8 +40,12 @@ namespace NurseServer.Net
             // Chương 3: UDP Auto-Discovery
             Task.Run(() => ListenForDiscoveryAsync());
             
-            // Chương 8: ICMP Health Check
-            Task.Run(() => IcmpHealthCheckLoopAsync());
+            // Chương 7: Dùng Thread trực tiếp (không phải Task) cho ICMP Health Check
+            // — minh họa Thread class, IsBackground, đặt tên thread để debug dễ hơn
+            Thread icmpThread = new Thread(() => IcmpHealthCheckLoopAsync().GetAwaiter().GetResult());
+            icmpThread.IsBackground = true;  // Tự tắt khi app đóng, không block process shutdown
+            icmpThread.Name = "ICMP-HealthCheck";
+            icmpThread.Start();
 
             // Chương 1, 2, 4, 5: TCP Server Asynchronous
             StartTcpListener();
@@ -64,7 +69,7 @@ namespace NurseServer.Net
                     try
                     {
                         var result = await _discoveryClient.ReceiveAsync();
-                        // Chương 4 (Bảo mật): Giải mã gói UDP bằng XOR
+                        // Chương 10 (10.3): Giải mã gói UDP bằng AES-128
                         string requestData = NetworkCrypto.Decrypt(result.Buffer, result.Buffer.Length);
                         
                         if (requestData == "GET_ACTIVE_ROOMS")
@@ -73,7 +78,7 @@ namespace NurseServer.Net
                             var grouped = allBeds.GroupBy(b => b.RoomName);
                             var roomEntries = grouped.Select(g => g.Key + ":" + string.Join(",", g.Select(b => b.BedName)));
                             string resp = "ROOMS|" + string.Join("~", roomEntries);
-                            // Chương 4 (Bảo mật): Mã hóa phản hồi ROOMS bằng XOR
+                            // Chương 10 (10.3): Mã hóa phản hồi ROOMS bằng AES-128
                             byte[] resBytes = NetworkCrypto.Encrypt(resp);
                             await _discoveryClient.SendAsync(resBytes, resBytes.Length, result.RemoteEndPoint);
                             continue;
@@ -195,9 +200,13 @@ namespace NurseServer.Net
                 using (StreamReader reader = new StreamReader(stream, Encoding.UTF8))
                 using (StreamWriter writer = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true })
                 {
-                    // Chương 4 (Bảo mật): Đọc dòng Base64, giải mã XOR
+                    // Chương 10 (10.3): Giải mã AES từ Base64
                     string encryptedLine = await reader.ReadLineAsync();
-                    string data = string.IsNullOrEmpty(encryptedLine) ? null : NetworkCrypto.DecryptFromBase64(encryptedLine);
+                    string decrypted = string.IsNullOrEmpty(encryptedLine) ? null : NetworkCrypto.DecryptFromBase64(encryptedLine);
+                    // Chương 10 (10.4): Xác minh HMAC — từ chối gói bị giả mạo hoặc sửa đổi trên đường truyền
+                    string data = string.IsNullOrEmpty(decrypted) ? null : NetworkCrypto.VerifyAndStripHmac(decrypted);
+                    if (data == null && decrypted != null)
+                        _logger("[BẢO MẬT] Gói TCP bị từ chối: HMAC không hợp lệ — dữ liệu có thể bị giả mạo!");
                     if (!string.IsNullOrEmpty(data))
                     {
                         // Format: ALERT|AlertType|RoomName|BedName

@@ -71,14 +71,14 @@ namespace PatientClient
                 using (var udp = new System.Net.Sockets.UdpClient())
                 {
                     udp.EnableBroadcast = true;
-                    // Chương 4 (Bảo mật): Mã hóa gói GET_ACTIVE_ROOMS bằng XOR
+                    // Chương 10 (10.3): Mã hóa gói GET_ACTIVE_ROOMS bằng AES-128 trước khi broadcast UDP
                     byte[] req = PatientClient.Net.NetworkCrypto.Encrypt("GET_ACTIVE_ROOMS");
                     await udp.SendAsync(req, req.Length, new System.Net.IPEndPoint(System.Net.IPAddress.Broadcast, 50000));
 
                     var receiveTask = udp.ReceiveAsync();
                     if (await System.Threading.Tasks.Task.WhenAny(receiveTask, System.Threading.Tasks.Task.Delay(2000)) == receiveTask)
                     {
-                        // Chương 4 (Bảo mật): Giải mã phản hồi ROOMS bằng XOR
+                        // Chương 10 (10.3): Giải mã phản hồi ROOMS bằng AES-128
                         byte[] buf = receiveTask.Result.Buffer;
                         string data = PatientClient.Net.NetworkCrypto.Decrypt(buf, buf.Length);
                         if (data.StartsWith("ROOMS|"))

@@ -47,7 +47,7 @@ namespace PatientClient.Net
                 while (!_serverFound)
                 {
                     string message = $"NURSE_CALL_DISCOVERY|{room}|{bed}|{mac}";
-                    // Chương 4 (Bảo mật): Mã hóa gói UDP bằng XOR trước khi broadcast
+                    // Chương 10 (10.3): Mã hóa gói UDP bằng AES-128 trước khi broadcast
                     byte[] bytes = NetworkCrypto.Encrypt(message);
                     
                     _onLog("UDP Broadcast: Đang tìm Quầy Y Tá...");
@@ -66,7 +66,7 @@ namespace PatientClient.Net
                 try
                 {
                     var result = await udpClient.ReceiveAsync();
-                    // Chương 4 (Bảo mật): Giải mã gói phản hồi từ Server bằng XOR
+                    // Chương 10 (10.3): Giải mã gói phản hồi UDP từ Server bằng AES-128
                     string response = NetworkCrypto.Decrypt(result.Buffer, result.Buffer.Length);
                     
                     if (response == "SERVER_ACK")
@@ -114,10 +114,11 @@ namespace PatientClient.Net
                     using (StreamReader reader = new StreamReader(stream, Encoding.UTF8))
                     {
                         string data = $"ALERT|{alertType}|{room}|{bed}";
-                        // Chương 4 (Bảo mật): Mã hóa dữ liệu bằng XOR, encode Base64 trước khi gửi TCP
-                        await writer.WriteLineAsync(NetworkCrypto.EncryptToBase64(data));
+                        // Chương 10 (10.4): Gắn HMAC vào data — đảm bảo Toàn vẹn + Xác thực thông điệp
+                        // Chương 10 (10.3): Mã hóa AES-128 toàn bộ (kể cả HMAC) trước khi gửi TCP
+                        await writer.WriteLineAsync(NetworkCrypto.EncryptToBase64(NetworkCrypto.AttachHmac(data)));
 
-                        // Đọc xác nhận, giải mã XOR từ Base64
+                        // Chương 10 (10.3): Giải mã ACK_ALERT từ Base64 AES
                         string encryptedAck = await reader.ReadLineAsync();
                         string ack = string.IsNullOrEmpty(encryptedAck) ? null : NetworkCrypto.DecryptFromBase64(encryptedAck);
                         if (ack == "ACK_ALERT")
@@ -159,7 +160,7 @@ namespace PatientClient.Net
                     
                     if (result > 0)
                     {
-                        // Chương 4 (Bảo mật): Giải mã gói Multicast bằng XOR
+                        // Chương 10 (10.3): Giải mã gói Multicast bằng AES-128
                         string data = NetworkCrypto.Decrypt(buffer, result);
                         if (data == "CODE_BLUE_EVACUATE")
                         {
