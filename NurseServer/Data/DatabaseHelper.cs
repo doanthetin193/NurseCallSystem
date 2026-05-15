@@ -82,18 +82,21 @@ namespace NurseServer.Data
 
         public static void ResetAllBedsToOffline()
         {
-            try
+            lock (_dbLock)
             {
-                using (var conn = new SQLiteConnection(GetConnectionString()))
+                try
                 {
-                    conn.Open();
-                    using (var cmdClear = new SQLiteCommand("UPDATE PatientBeds SET Status = 'Offline', MacAddress = '', IpAddress = ''", conn))
+                    using (var conn = new SQLiteConnection(GetConnectionString()))
                     {
-                        cmdClear.ExecuteNonQuery();
+                        conn.Open();
+                        using (var cmdClear = new SQLiteCommand("UPDATE PatientBeds SET Status = 'Offline', MacAddress = '', IpAddress = ''", conn))
+                        {
+                            cmdClear.ExecuteNonQuery();
+                        }
                     }
                 }
+                catch { }
             }
-            catch { }
         }
 
         public static void UpsertBed(PatientBed bed)
@@ -126,19 +129,22 @@ namespace NurseServer.Data
         
         public static void DeleteBed(string macAddress)
         {
-            try
+            lock (_dbLock)
             {
-                using (var conn = new SQLiteConnection(GetConnectionString()))
+                try
                 {
-                    conn.Open();
-                    using (var cmd = new SQLiteCommand("UPDATE PatientBeds SET Status = 'Offline', MacAddress = '', IpAddress = '' WHERE MacAddress = @mac", conn))
+                    using (var conn = new SQLiteConnection(GetConnectionString()))
                     {
-                        cmd.Parameters.AddWithValue("@mac", macAddress);
-                        cmd.ExecuteNonQuery();
+                        conn.Open();
+                        using (var cmd = new SQLiteCommand("UPDATE PatientBeds SET Status = 'Offline', MacAddress = '', IpAddress = '' WHERE MacAddress = @mac", conn))
+                        {
+                            cmd.Parameters.AddWithValue("@mac", macAddress);
+                            cmd.ExecuteNonQuery();
+                        }
                     }
                 }
+                catch { }
             }
-            catch { }
         }
 
         public static string GetBedStatus(string roomName, string bedName)
@@ -269,80 +275,92 @@ namespace NurseServer.Data
 
         public static void MarkResolvedLogs(string roomName, string bedName)
         {
-            try
+            lock (_dbLock)
             {
-                using (var conn = new SQLiteConnection(GetConnectionString()))
+                try
                 {
-                    conn.Open();
-                    string caller = $"{roomName} - {bedName}";
-                    // Cập nhật tất cả các log chưa có thời gian xử lý của Giường này
-                    using (var cmd = new SQLiteCommand("UPDATE CallLogs SET ResolvedTime = @time WHERE PatientBedName = @caller AND ResolvedTime IS NULL", conn))
+                    using (var conn = new SQLiteConnection(GetConnectionString()))
                     {
-                        cmd.Parameters.AddWithValue("@time", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
-                        cmd.Parameters.AddWithValue("@caller", caller);
-                        cmd.ExecuteNonQuery();
+                        conn.Open();
+                        string caller = $"{roomName} - {bedName}";
+                        // Cập nhật tất cả các log chưa có thời gian xử lý của Giường này
+                        using (var cmd = new SQLiteCommand("UPDATE CallLogs SET ResolvedTime = @time WHERE PatientBedName = @caller AND ResolvedTime IS NULL", conn))
+                        {
+                            cmd.Parameters.AddWithValue("@time", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+                            cmd.Parameters.AddWithValue("@caller", caller);
+                            cmd.ExecuteNonQuery();
+                        }
                     }
                 }
+                catch { }
             }
-            catch { }
         }
 
         public static void SetBedOffline(string roomName, string bedName)
         {
-            try
+            lock (_dbLock)
             {
-                using (var conn = new SQLiteConnection(GetConnectionString()))
+                try
                 {
-                    conn.Open();
-                    // Clear IpAddress so ICMP Ping loop doesn't resurrect it on Localhost
-                    using (var cmd = new SQLiteCommand("UPDATE PatientBeds SET Status = 'Offline', IpAddress = '' WHERE RoomName = @room AND BedName = @bed", conn))
+                    using (var conn = new SQLiteConnection(GetConnectionString()))
                     {
-                        cmd.Parameters.AddWithValue("@room", roomName);
-                        cmd.Parameters.AddWithValue("@bed", bedName);
-                        cmd.ExecuteNonQuery();
+                        conn.Open();
+                        // Clear IpAddress so ICMP Ping loop doesn't resurrect it on Localhost
+                        using (var cmd = new SQLiteCommand("UPDATE PatientBeds SET Status = 'Offline', IpAddress = '' WHERE RoomName = @room AND BedName = @bed", conn))
+                        {
+                            cmd.Parameters.AddWithValue("@room", roomName);
+                            cmd.Parameters.AddWithValue("@bed", bedName);
+                            cmd.ExecuteNonQuery();
+                        }
                     }
                 }
+                catch { }
             }
-            catch { }
         }
 
         public static void DeleteBedAbsolute(string roomName, string bedName)
         {
-            try
+            lock (_dbLock)
             {
-                using (var conn = new SQLiteConnection(GetConnectionString()))
+                try
                 {
-                    conn.Open();
-                    using (var cmd = new SQLiteCommand("DELETE FROM PatientBeds WHERE RoomName = @room AND BedName = @bed", conn))
+                    using (var conn = new SQLiteConnection(GetConnectionString()))
                     {
-                        cmd.Parameters.AddWithValue("@room", roomName);
-                        cmd.Parameters.AddWithValue("@bed", bedName);
-                        cmd.ExecuteNonQuery();
+                        conn.Open();
+                        using (var cmd = new SQLiteCommand("DELETE FROM PatientBeds WHERE RoomName = @room AND BedName = @bed", conn))
+                        {
+                            cmd.Parameters.AddWithValue("@room", roomName);
+                            cmd.Parameters.AddWithValue("@bed", bedName);
+                            cmd.ExecuteNonQuery();
+                        }
                     }
                 }
+                catch { }
             }
-            catch { }
         }
         
         public static bool AddNewBed(string roomName, string bedName)
         {
-            try
+            lock (_dbLock)
             {
-                using (var conn = new SQLiteConnection(GetConnectionString()))
+                try
                 {
-                    conn.Open();
-                    string insertSql = "INSERT INTO PatientBeds (RoomName, BedName, MacAddress, IpAddress, Status, LastSeen) VALUES (@room, @bed, '', '', 'Offline', @last)";
-                    using (var cmd = new SQLiteCommand(insertSql, conn))
+                    using (var conn = new SQLiteConnection(GetConnectionString()))
                     {
-                        cmd.Parameters.AddWithValue("@room", roomName);
-                        cmd.Parameters.AddWithValue("@bed", bedName);
-                        cmd.Parameters.AddWithValue("@last", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
-                        cmd.ExecuteNonQuery();
+                        conn.Open();
+                        string insertSql = "INSERT INTO PatientBeds (RoomName, BedName, MacAddress, IpAddress, Status, LastSeen) VALUES (@room, @bed, '', '', 'Offline', @last)";
+                        using (var cmd = new SQLiteCommand(insertSql, conn))
+                        {
+                            cmd.Parameters.AddWithValue("@room", roomName);
+                            cmd.Parameters.AddWithValue("@bed", bedName);
+                            cmd.Parameters.AddWithValue("@last", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+                            cmd.ExecuteNonQuery();
+                        }
+                        return true;
                     }
-                    return true;
                 }
+                catch { return false; }
             }
-            catch { return false; }
         }
 
 

@@ -4,6 +4,9 @@ using System.Drawing;
 using System.Windows.Forms;
 using PatientClient.Net;
 using System.IO;
+using System.Threading.Tasks;
+using System.Net;
+using System.Net.Sockets;
 
 namespace PatientClient
 {
@@ -42,18 +45,18 @@ namespace PatientClient
             lblStatus.Text = "Status: Vui lòng bật Server Y Tá để tải danh sách phòng...";
 
             // Retry liên tục mỗi 4s cho đến khi Server phản hồi
-            System.Threading.Tasks.Task.Run(RetryLoadRoomsLoop);
+            Task.Run(RetryLoadRoomsLoop);
         }
 
         // Vòng lặp retry: thử mỗi 4 giây, dừng khi thành công hoặc user đã bấm Save
-        private async System.Threading.Tasks.Task RetryLoadRoomsLoop()
+        private async Task RetryLoadRoomsLoop()
         {
             while (true)
             {
                 bool success = await TryGetRoomsFromServer();
                 if (success) break;
 
-                await System.Threading.Tasks.Task.Delay(4000);
+                await Task.Delay(4000);
 
                 // Dừng retry nếu user đã bấm Save (pnlSetup bị ẩn đi rồi)
                 bool setupDone = false;
@@ -64,23 +67,23 @@ namespace PatientClient
         }
 
         // Thử 1 lần gửi GET_ACTIVE_ROOMS, trả về true nếu thành công
-        private async System.Threading.Tasks.Task<bool> TryGetRoomsFromServer()
+        private async Task<bool> TryGetRoomsFromServer()
         {
             try
             {
-                using (var udp = new System.Net.Sockets.UdpClient())
+                using (var udp = new UdpClient())
                 {
                     udp.EnableBroadcast = true;
                     // Chương 10 (10.3): Mã hóa gói GET_ACTIVE_ROOMS bằng AES-128 trước khi broadcast UDP
-                    byte[] req = PatientClient.Net.NetworkCrypto.Encrypt("GET_ACTIVE_ROOMS");
-                    await udp.SendAsync(req, req.Length, new System.Net.IPEndPoint(System.Net.IPAddress.Broadcast, 50000));
+                    byte[] req = NetworkCrypto.Encrypt("GET_ACTIVE_ROOMS");
+                    await udp.SendAsync(req, req.Length, new IPEndPoint(IPAddress.Broadcast, 50000));
 
                     var receiveTask = udp.ReceiveAsync();
-                    if (await System.Threading.Tasks.Task.WhenAny(receiveTask, System.Threading.Tasks.Task.Delay(2000)) == receiveTask)
+                    if (await Task.WhenAny(receiveTask, Task.Delay(2000)) == receiveTask)
                     {
                         // Chương 10 (10.3): Giải mã phản hồi ROOMS bằng AES-128
                         byte[] buf = receiveTask.Result.Buffer;
-                        string data = PatientClient.Net.NetworkCrypto.Decrypt(buf, buf.Length);
+                        string data = NetworkCrypto.Decrypt(buf, buf.Length);
                         if (data.StartsWith("ROOMS|"))
                         {
                             var roomEntries = data.Substring(6).Split(new[] { '~' }, StringSplitOptions.RemoveEmptyEntries);
@@ -276,7 +279,7 @@ namespace PatientClient
                 {
                     try
                     {
-                        System.Threading.Tasks.Task.Run(() => _networkManager.SendTcpAlertAsync("OFFLINE", _roomName, _bedName)).Wait(500); 
+                        Task.Run(() => _networkManager.SendTcpAlertAsync("OFFLINE", _roomName, _bedName)).Wait(500); 
                     }
                     catch { }
                 }

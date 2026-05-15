@@ -1,8 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
-using System.Windows.Forms;
 using System.Linq;
+using System.Text.RegularExpressions;
+using System.Windows.Forms;
 using NurseServer.Data;
+using NurseServer.Models;
 using NurseServer.Net;
 
 namespace NurseServer
@@ -72,11 +75,11 @@ namespace NurseServer
             }
             
             var allBeds = DatabaseHelper.GetAllBeds();
-            var filtered = new System.Collections.Generic.List<NurseServer.Models.PatientBed>();
+            var filtered = new List<PatientBed>();
             
             // 🌟 FEATURE: Cập nhật động Dropdown dãy Tầng dựa trên CSDL hiện hữu
             var activeFloors = allBeds.Select(b => {
-                var m = System.Text.RegularExpressions.Regex.Match(b.RoomName, @"^Phòng (\d+)0\d$");
+                var m = Regex.Match(b.RoomName, @"^Phòng (\d+)0\d$");
                 return m.Success ? int.Parse(m.Groups[1].Value) : 1;
             }).Distinct().OrderBy(f => f).ToList();
 
@@ -98,17 +101,35 @@ namespace NurseServer
 
             foreach (var b in allBeds)
             {
-                if (!string.IsNullOrEmpty(floorFilter) && !System.Text.RegularExpressions.Regex.IsMatch(b.RoomName, $@"^Phòng {floorFilter}0\d$")) continue;
-                
-                if (statusFilter != "Tất cả trạng thái")
+                // BƯỚC 1: Kiểm tra Tầng hợp lệ (Không lọc tầng, HOẶC đúng tầng đã chọn)
+                if (string.IsNullOrEmpty(floorFilter) || Regex.IsMatch(b.RoomName, $@"^Phòng {floorFilter}0\d$"))
                 {
-                    if (statusFilter == "Chỉ các máy BÁO ĐỘNG" && (b.Status == "Normal" || b.Status == "Offline")) continue;
-                    if (statusFilter.Contains("CẤP CỨU") && b.Status != "CẤP CỨU") continue;
-                    if (statusFilter.Contains("THAY DỊCH") && b.Status != "THAY DỊCH TRUYỀN") continue;
-                    if (statusFilter.Contains("HỖ TRỢ") && b.Status != "HỖ TRỢ VỆ SINH") continue;
+                    // BƯỚC 2: Kiểm tra Trạng thái hợp lệ
+                    if (statusFilter == "Tất cả trạng thái")
+                    {
+                        filtered.Add(b);
+                    }
+                    else if (statusFilter == "Chỉ các máy BÁO ĐỘNG")
+                    {
+                        // Giữ lại tính linh hoạt: Báo động là bất cứ trạng thái nào không phải Bình yên
+                        if (b.Status != "Normal" && b.Status != "Offline")
+                        {
+                            filtered.Add(b);
+                        }
+                    }
+                    else if (statusFilter.Contains("CẤP CỨU") && b.Status == "CẤP CỨU")
+                    {
+                        filtered.Add(b);
+                    }
+                    else if (statusFilter.Contains("THAY DỊCH") && b.Status == "THAY DỊCH TRUYỀN")
+                    {
+                        filtered.Add(b);
+                    }
+                    else if (statusFilter.Contains("HỖ TRỢ") && b.Status == "HỖ TRỢ VỆ SINH")
+                    {
+                        filtered.Add(b);
+                    }
                 }
-                
-                filtered.Add(b);
             }
 
             dgvBeds.DataSource = null;
@@ -183,7 +204,7 @@ namespace NurseServer
                 string bed = row.Cells["BedName"].Value?.ToString();
                 string ip = row.Cells["IpAddress"].Value?.ToString();
                 
-                DatabaseHelper.UpsertBed(new NurseServer.Models.PatientBed {
+                DatabaseHelper.UpsertBed(new PatientBed {
                     MacAddress = mac, RoomName = room, BedName = bed,
                     IpAddress = ip, Status = "Normal", LastSeen = DateTime.Now
                 });
@@ -219,58 +240,104 @@ namespace NurseServer
         
         private void btnAddRoom_Click(object sender, EventArgs e)
         {
+            // Lấy toàn bộ danh sách giường từ database.
             var beds = DatabaseHelper.GetAllBeds();
+            
+            // Đặt giá trị mặc định nếu bệnh viện chưa có dữ liệu (tạo Phòng 101 - Giường A).
             int nextFloor = 1;
             int nextRoomIdx = 1;
             char nextBedChar = 'A';
 
+            // Nếu database đã có dữ liệu thì mới tính tiếp.
             if (beds.Count > 0)
             {
-                var maxBed = beds.OrderByDescending(b => {
-                    var match = System.Text.RegularExpressions.Regex.Match(b.RoomName, @"^Phòng (\d+)(0[1-5])$");
-                    if(match.Success) return int.Parse(match.Groups[1].Value) * 100 + int.Parse(match.Groups[2].Value);
-                    return 0;
-                }).ThenByDescending(b => b.BedName).FirstOrDefault();
+                // Dùng vòng lặp foreach để tìm ra cái giường "lớn nhất" (phòng xa nhất, giường xa nhất)
+                PatientBed maxBed = null;
+                int maxRoomWeight = -1; // Trọng số phòng lớn nhất (VD: Phòng 203 -> Trọng số 203)
+                char maxBedChar = 'A';  // Ký tự giường lớn nhất
 
-                if (maxBed != null)
+                foreach (var b in beds)
                 {
-                    var match = System.Text.RegularExpressions.Regex.Match(maxBed.RoomName, @"^Phòng (\d+)(0[1-5])$");
+                    // Dùng Regex để tách số phòng (VD: Phòng 203 -> Group 1: 2, Group 2: 03)
+                    var match = Regex.Match(b.RoomName, @"^Phòng (\d+)(0[1-5])$");
                     if (match.Success)
                     {
-                        nextFloor = int.Parse(match.Groups[1].Value);
-                        nextRoomIdx = int.Parse(match.Groups[2].Value);
-                        char currentBedChar = maxBed.BedName.Replace("Giường ", "")[0];
+                        // Biến phòng thành số trọng lượng để dễ so sánh (VD: 2 * 100 + 3 = 203)
+                        int currentRoomWeight = int.Parse(match.Groups[1].Value) * 100 + int.Parse(match.Groups[2].Value);
+                        // Lấy ký tự giường hiện tại (VD: Giường C -> C)
+                        char currentBedChar = b.BedName.Replace("Giường ", "")[0];
 
-                        if (currentBedChar < 'E')
+                        // So sánh xem giường này có lớn hơn kỷ lục hiện tại không?
+                        bool isNewRecord = false;
+                        if (currentRoomWeight > maxRoomWeight)
                         {
-                            nextBedChar = (char)(currentBedChar + 1);
+                            isNewRecord = true; // Phòng lớn hơn hẳn
                         }
-                        else 
+                        else if (currentRoomWeight == maxRoomWeight && currentBedChar > maxBedChar)
                         {
-                            nextBedChar = 'A';
-                            nextRoomIdx++;
-                            if (nextRoomIdx > 5)
-                            {
-                                nextRoomIdx = 1;
-                                nextFloor++;
-                            }
+                            isNewRecord = true; // Cùng phòng, nhưng giường lớn hơn (VD: E lớn hơn A)
+                        }
+
+                        // Nếu tìm thấy kỷ lục mới, cập nhật lại biến
+                        if (isNewRecord || maxBed == null)
+                        {
+                            maxRoomWeight = currentRoomWeight;
+                            maxBedChar = currentBedChar;
+                            maxBed = b;
+                        }
+                    }
+                }
+
+                // Nếu tìm được giường cuối cùng sau khi duyệt xong
+                if (maxBed != null)
+                {
+                    // Từ trọng số kỷ lục (VD: 203), ta suy ngược lại Tầng và Phòng
+                    nextFloor = maxRoomWeight / 100;    // Lấy phần nguyên: 203 / 100 = 2
+                    nextRoomIdx = maxRoomWeight % 100;  // Lấy phần dư: 203 % 100 = 3
+
+                    // Nếu hiện tại là A/B/C/D thì tăng tiếp (chưa tới giường E)
+                    if (maxBedChar < 'E')
+                    {
+                        // Tăng ký tự (VD: C + 1 => D)
+                        nextBedChar = (char)(maxBedChar + 1);
+                    }
+                    // Nếu đã tới giường E thì phải sang phòng mới
+                    else 
+                    {
+                        // Reset giường về A
+                        nextBedChar = 'A';
+                        // Tăng số phòng (VD: 203 -> 204)
+                        nextRoomIdx++;
+                        // Nếu vượt quá 5 phòng/tầng (VD: 205 thêm nữa thì lên tầng)
+                        if (nextRoomIdx > 5)
+                        {
+                            // Quay về phòng 01
+                            nextRoomIdx = 1;
+                            // Tăng tầng (VD: 205 -> 301)
+                            nextFloor++;
                         }
                     }
                 }
             }
 
+            // Tạo tên phòng và giường mới
             string nextRoomName = $"Phòng {nextFloor}0{nextRoomIdx}";
             string nextBedName = $"Giường {nextBedChar}";
 
+            // Lấy số tầng tối đa từ cấu hình NumericUpDown
             int maxFloors = (int)numMaxFloors.Value;
+            // Nếu tầng tiếp theo vượt giới hạn thì báo lỗi và dừng hàm
             if (nextFloor > maxFloors) 
             {
                 MessageBox.Show($"Không thể thêm: bệnh viện chỉ có {maxFloors} tầng!", "Đã đạt giới hạn", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
 
+            // Lưu vào database
             DatabaseHelper.AddNewBed(nextRoomName, nextBedName);
+            // Load lại danh sách giường trên giao diện
             RefreshBedList();
+            // Ghi log
             LogMessage($"[HỆ THỐNG] Đã TỰ ĐỘNG xây kề tiếp: {nextRoomName} - {nextBedName}");
         }
 
@@ -282,7 +349,7 @@ namespace NurseServer
         private void btnManualAdd_Click(object sender, EventArgs e)
         {
             string roomNum = txtManualRoom.Text.Trim();
-            var matchRoom = System.Text.RegularExpressions.Regex.Match(roomNum, @"^(\d+)(0[1-5])$");
+            var matchRoom = Regex.Match(roomNum, @"^(\d+)(0[1-5])$");
             if (!matchRoom.Success)
             {
                 MessageBox.Show(

@@ -20,7 +20,7 @@ namespace PatientClient.Net
         private Action<string, string> _onResolved;
         private bool _serverFound = false;
         private string _serverIp = "";
-        private System.Net.Sockets.Socket _multicastSocket;
+        private Socket _multicastSocket;
         private bool _isRunning = true;
         
         private Action _onBedTaken;
@@ -146,7 +146,7 @@ namespace PatientClient.Net
             // Chuyển sang dùng Socket thô để an toàn tuyệt đối với ReuseAddress
             try 
             {
-                _multicastSocket = new System.Net.Sockets.Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+                _multicastSocket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
                 _multicastSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
                 _multicastSocket.Bind(new IPEndPoint(IPAddress.Any, MulticastPort));
                 _multicastSocket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.AddMembership, new MulticastOption(IPAddress.Parse(MulticastIp)));
